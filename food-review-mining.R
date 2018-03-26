@@ -2,11 +2,13 @@ install.packages("tidytext")
 install.packages("dplyr")
 install.packages("readr")
 install.packages("ggplot2")
+install.packages("stringr")
 
 library(tidytext)
 library(dplyr)
 library(readr)
 library(ggplot2)
+library(stringr)
 
 #Setting project directory
 setwd("~/food-review-model")
@@ -107,16 +109,22 @@ textSentiment %>% left_join(reviews) %>%
   ggplot(aes(x=Score, y=mean)) +
   geom_point()
 
-
+ 
 #Punctuation
-?regex
 descPunct <- reviews %>%
   mutate(excl = str_detect(Summary, pattern="[!]"),
-  quest = str_detect(Summary, pattern="[?]"),
-  ellip = str_detect(Summary, pattern="[.]{3}"))
+         quest = str_detect(Summary, pattern="[?]"),
+         ellip = str_detect(Summary, pattern="[.]{3}"),
+         cap = str_detect(Summary, pattern = "[:upper:]{2,}"))
 
+descPunct %>% group_by(excl) %>%
+  summarise(mean = mean(Score))
 
-descPunct %>%
-  ggplot(aes(x=excl, y=Score)) +
-  geom_boxplot()
-  
+descPunct %>% group_by(quest) %>%
+  summarise(mean = mean(Score))
+
+descPunct %>% group_by(ellip) %>%
+  summarise(mean = mean(Score))
+
+descPunct %>% group_by(cap) %>%
+  summarise(mean = mean(Score))
