@@ -18,22 +18,29 @@ reviews <- read_csv("food.csv")
 reviews <- reviews %>%
   mutate(nr = row_number())
 
+summary(reviews[1:3])
+
+ggplot(reviews) +
+  geom_histogram(aes(x=Score), bins=9) +
+  ylab("Liczba ocen") +
+  xlab("Punkty")
+
 head(reviews)
 
 #Splitting data into training and testing sets
-half <- nrow(reviews) %/% 2
-trainSet <- reviews %>% slice(1:half)
-testSet <- reviews %>% slice((half + 1):n())
+splitPoint <- nrow(reviews) %/% 3 * 2
+trainSet <- reviews %>% slice(1:splitPoint)
+testSet <- reviews %>% slice((splitPoint + 1):n())
 
 #Analizing words in Summary
-descWords <- trainSet %>%
+textWords <- reviews %>%
   select(nr, Summary) %>%
   unnest_tokens(word, Summary)
 
 #Structure
 descWords %>%
   count(word, sort = T) %>%
-  filter(n > 200) %>%
+  filter(n > 600) %>%
   mutate(word = reorder(word, n)) %>%
   ggplot(aes(x = word, y = n)) +
   geom_col() + 
@@ -41,31 +48,30 @@ descWords %>%
   ylab("liczba wystąpień") +
   coord_flip()
 
+descWords %>% left_join(reviews) %>%
+  count(Score, word) %>%
+  ggplot(aes(x=Score, y=n)) +
+  geom_point(alpha = .5) +
+  xlab("Liczba punktów") +
+  ylab("Długość recenzji (w słowach)")
+
 #Sentiment analysis
 
 #lexicon
 #(-5 - very negative, 5 - very positive)
 afinn <- get_sentiments("afinn")
-head(afinn)
 
 #Including the impact of word "not"
 descWords <- descWords %>%
-  mutate(not = ifelse(word == "not", -1, 1))
-
-for(i in rev(2:nrow(descWords))){
-  descWords$not[i] = descWords$not[i-1]
-}
+  mutate(not = ifelse(lag(word, n=1) == "not", -1, 1))
 
 descSentiment <- descWords %>% inner_join(afinn) %>%
   rename(sentiment = score) %>%
   group_by(nr) %>%
   summarise(sum = sum(sentiment*not))
 
-descSentiment2 <- descWords %>% inner_join(afinn) %>%
-  rename(sentiment = score) %>%
-  group_by(nr) %>%
-  summarise(sum = sum(sentiment))
 
+#Plots
 descSentiment %>% left_join(reviews) %>%
   ggplot(aes(x=Score, y=sum)) +
   geom_point(alpha = .1) +
@@ -82,16 +88,14 @@ descSentiment %>% left_join(reviews) %>%
 
 
 #Same for full text of review  
-textWords <- trainSet %>%
+textWords <- reviews %>%
   select(nr, Text) %>%
   unnest_tokens(word, Text)
 
 textWords <- textWords %>%
-  mutate(not = ifelse(word == "not", -1, 1))
+  mutate(not = ifelse(row_number() == 1, 1, ifelse(
+    word[row_number()-1] == "not", -1, 1)))
 
-for(i in rev(2:nrow(textWords))){
-  textWords$not[i] = textWords$not[i-1]
-}
 
 textSentiment <- textWords %>% inner_join(afinn) %>%
   rename(sentiment = score) %>%
@@ -117,14 +121,20 @@ descPunct <- reviews %>%
          ellip = str_detect(Summary, pattern="[.]{3}"),
          cap = str_detect(Summary, pattern = "[:upper:]{2,}"))
 
-descPunct %>% group_by(excl) %>%
+exclR <- descPunct %>% group_by(excl) %>%
   summarise(mean = mean(Score))
 
-descPunct %>% group_by(quest) %>%
+questR <- descPunct %>% group_by(quest) %>%
   summarise(mean = mean(Score))
 
-descPunct %>% group_by(ellip) %>%
+ellipR <- descPunct %>% group_by(ellip) %>%
   summarise(mean = mean(Score))
 
-descPunct %>% group_by(cap) %>%
+capR <- descPunct %>% group_by(cap) %>%
   summarise(mean = mean(Score))
+
+result <- data.frame(exclR, questR, ellipR, capR)
+
+
+
+  
