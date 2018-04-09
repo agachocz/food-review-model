@@ -1,0 +1,200 @@
+---
+title: "Analiza opinii klientów"
+author: "Agnieszka Choczyńska"
+date: "26 marca 2018"
+output: html_document
+---
+
+## Wstęp
+
+Praca ma na celu analizę tekstu opinii klientów na temat produktów spożywczych w celu późniejszego przygotowania modelu, prognozującego punktową ocenę na podstawie recenzji.
+
+Przeanalizowane zostaną różne właściwości tekstu:
+
+- długość (liczba znaków)
+
+- zabarwienie (pozytywne lub negatywne) słów
+
+- znaki interpunkcyjne
+
+- fragmenty pisane w całości wielkimi literami
+
+
+```{r warning=FALSE, message=FALSE }
+library(tidytext)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(stringr)
+```
+
+## Analiza
+
+### Dane
+
+Pierwszym krokiem jest wczytanie i wstępna obróbka danych:
+```{r warning=FALSE, message=FALSE }
+#Setting project directory
+setwd("~/food-review-model")
+
+#Loading dataset
+reviews <- read_csv("food.csv")
+reviews <- reviews %>%
+  mutate(nr = row_number())
+
+```
+
+Zawierają one **28138** obserwacji, składających się z:
+
+- zmiennej całkowitej **Score**, przedstawiającej liczbę punktów w skali **1 - 5**, jaką klient przyznał produktowi
+
+- zmiennej tekstowej **Summary**, zawierającej krótkie podsumowanie recenzji
+
+- zmiennej tekstowej **Text**, zawierającej pełny tekst recenzji
+
+- dodatkowej zmiennej całkowitej **nr**, oznaczającej numer recenzji i służącej jako identyfikator
+
+Fragment danych przedstawiono na wydruku poniżej.
+
+```{r echo = FALSE}
+head(reviews)
+```
+
+Na wstępie warto jeszcze zwrócić uwagę na rozkład danych w zmiennej **Score**. Jak widać na załączonym poniżej histogramie, zdecydowana większość ocen produktów jest bardzo pozytywna (5 punktów), co będzie miało znaczenie przy doborze hipotez.
+
+```{r warning=FALSE, message=FALSE }
+ggplot(reviews) +
+  geom_histogram(aes(x=Score), bins=9) +
+  ylab("liczba ocen") +
+  xlab("punkty")
+```
+
+
+W tej części pracy postawiono następujące hipotezy:
+
+- **Im dłuższy tekst recenzji, tym więcej punktów zdobywa produkt.** Ponieważ niewiele jest w zbiorze ocen negatywnych, można się spodziewać, że większość recenzji będzie albo wyrażała entuzjazm (co wiąże się z kwiecistym językiem), albo obojętność (oszczędność w słowach)
+
+- **Im więcej pozytywnych słów w recenzji, tym więcej punktów zdobywa produkt.** 
+
+- **Niewerbalne elementy tekstu mają odzwierciedlenie w ocenie.** Zbadano występowanie czterech takich elementów. Założono, że *wykrzykniki* wiążą się z bardziej pozytywnymi ocenami, *pytajniki* oraz *wielokropki* z bardziej negatywnymi (jako wyraz rozczarowania), a występowanie fragmentów wypisanych wielkimi literami również z negatywnymi (jako wyraz złości). 
+
+
+Zależności te zostały zbadane zarówno na tekście pełnej recenzji (zmienna `Text`) jak i krótkim podsumowaniu (zmienna `Summary`), ale ponieważ wyniki okazały się bardzo podobne, w pracy zamieszczono tylko analizę podsumowania, aby ograniczyć złożoność obliczeniową.
+
+
+
+### Relacja między długością recenzji a oceną
+
+
+Sprawdzenie tej hipotezy odbywa się poprzez proste zliczenie słów w podsumowaniach recenzji, a następnie zestawienie długości tekstu i liczby uzyskanych przez produkt punktów na wykresie.
+
+```{r message=FALSE, warning=FALSE}
+#Analizing words in Text
+descWords <- reviews %>%
+  select(nr, Summary) %>%
+  unnest_tokens(word, Summary)
+  
+descWords %>% left_join(reviews) %>%
+  count(Score, word) %>%
+  ggplot(aes(x=Score, y=n)) +
+  geom_point(alpha = .5) +
+  xlab("liczba punktów") +
+  ylab("długość recenzji (w słowach)")
+```
+
+Chociaż widać, że produkty wycenione na 5 punktów mają sporo długich recenzji, nie wydaje się, by faktycznie liczba słów mogła mieć duży wpływ na ocenę.
+
+
+
+### Relacja między pozytywnym/negatywnym zabarwieniem słów a oceną
+
+
+Ta część analizy zostanie przeprowadzona z wykorzystaniem słownika *afinn*, oznaczającego nacechowane wartościująco słowa liczbami całkowitymi w skali od **-5** (bardzo negatywne) do **5** (bardzo pozytywne). 
+
+```{r message=FALSE, warning=FALSE}
+#lexicon
+#(-5 - very negative, 5 - very positive)
+afinn <- get_sentiments("afinn")
+```
+
+Wszystkie operacje przeprowadzono zarówno na pełnym tekście recenzji, jak i podsumowaniu, ale ponieważ uzyskano bardzo podobne wyniki, praca prezentuje tylko analizę recenzji.
+
+Ponieważ analiza opiera się na pojedynczych słowach, dodano zmienną pomocniczą **not**, która umożliwia uwzględnienie zaprzeczenia. Słowo występujące w tekście po słowie *not* lub *don't* otrzyma wartość będącą odwrotnością swojej słownikowej wartości. Zabieg ten jest istotny, ponieważ - jak pokazuje poniższy wykres - zaprzeczenie jest jednym z najczęściej występujących słów.
+
+```{r message=FALSE, warning=FALSE}
+
+#Structure
+descWords %>%
+  count(word, sort = T) %>%
+  filter(n > 600) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(x = word, y = n)) +
+  geom_col() + 
+  xlab(NULL) +
+  ylab("liczba wystąpień") +
+  coord_flip()
+```
+
+Przedstawione powyżej oparacje są wykonywane przez następujący kod:
+```{r message = FALSE, warning=FALSE}
+#Including the impact of word "not" or "don't"
+descWords <- descWords %>%
+  mutate(not = ifelse(lag(word, n=1) == "not", -1, 1))
+
+descSentiment <- descWords %>% inner_join(afinn) %>%
+  rename(sentiment = score) %>%
+  group_by(nr) %>%
+  summarise(sum = sum(sentiment*not))
+
+descSentiment %>% left_join(reviews) %>%
+  ggplot(aes(x=Score, y=sum)) +
+  geom_point(alpha = .1) +
+  geom_smooth(method="lm") +
+  ylab("suma wartości słów") +
+  xlab("punkty")
+
+```
+
+Wykres pokazuje wyraźną, spodziewaną zależność między oceną produktu a sumą wartości słów w recenzji, jednak widać też, że rozrzut wyników jest bardzo duży.
+
+
+
+### Relacja między pozawerbalnymi elementami tekstu a oceną
+
+
+W celu sprawdzenia hipotez związanych z występowaniem określonych znaków interpunkcyjnych i fragmentów napisanych wielkimi literami posłużono się pakietem *stringr* i wyrażeniami regularnymi. Poniższy kod sprawdza, w których podsumowaniach występują dane elementy.
+
+```{r message = FALSE, warning=FALSE}
+#Punctuation
+descPunct <- reviews %>%
+  mutate(excl = str_detect(Summary, pattern="[!]"),
+         quest = str_detect(Summary, pattern="[?]"),
+         ellip = str_detect(Summary, pattern="[.]{3}"),
+         cap = str_detect(Summary, pattern = "[:upper:]{2,}"))
+
+exclR <- descPunct %>% group_by(excl) %>%
+  summarise(mean = mean(Score))
+
+questR <- descPunct %>% group_by(quest) %>%
+  summarise(mean = mean(Score))
+
+ellipR <- descPunct %>% group_by(ellip) %>%
+  summarise(mean = mean(Score))
+
+capR <- descPunct %>% group_by(cap) %>%
+  summarise(mean = mean(Score))
+
+result <- data.frame(exclR, questR, ellipR, capR)
+
+print(result)
+
+```
+
+Tabela zawiera porównanie średniej liczby punktów dla tekstów zawierających i niezawierających określonych elementów. Wartości wydają się potwierdzać intuicję, na bazie której sformułowano hipotezę (wykrzykniki wiążą się z wyższymi ocenami, wszystkie pozostałe elementy z niższymi), ale różnice - z wyjątkiem znaków zapytania - nie wydają się znaczące.
+
+
+
+## Podsumowanie
+
+
+Założone na początku analizy hipotezy wydają się znajdować potwierdzenie w danych. Żadna z badanych właściwości tekstu nie wiąże się jednak w bardzo wyraźny sposób z uzyskaną przez produkt oceną.
