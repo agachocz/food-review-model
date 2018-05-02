@@ -1,0 +1,58 @@
+---
+title: "Model prognozowania oceny na podstawie recenzji konsumenckiej"
+author: "Agnieszka Choczyńska"
+date: "2 maja 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Wprowadzenie
+
+Celem pracy jest opracowanie modelu do prognozowania oceny produktu na podstawie tekstowej recenzji konsumenta. Wykorzystane zostaną do tego zmienne opisujące właściwości tekstu, wytworzone technikami text-miningu w poprzedniej części pracy, oraz kilka metod prognostycznych, spośród których zostanie wybrana najlepsza.
+
+```{r warning=FALSE, message=FALSE, echo = FALSE}
+library(tidytext)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(stringr)
+```
+
+### Dane
+
+Dane z pliku *food.csv* zawierają **28138** obserwacji, składających się z:
+
+- zmiennej całkowitej **Score**, przedstawiającej liczbę punktów w skali **1 - 5**, jaką klient przyznał produktowi
+
+- zmiennej tekstowej **Summary**, zawierającej krótkie podsumowanie recenzji
+
+- zmiennej tekstowej **Text**, zawierającej pełny tekst recenzji
+
+- dodatkowej zmiennej całkowitej **nr**, oznaczającej numer recenzji i służącej jako identyfikator
+
+Fragment danych przedstawiono na wydruku poniżej.
+
+```{r echo = FALSE}
+#Setting project directory
+setwd("~/food-review-model")
+
+#Loading dataset
+reviews <- read_csv("food.csv")
+reviews <- reviews %>%
+  mutate(nr = row_number())
+head(reviews)
+```
+
+
+### Zmienne objaśniające
+
+Na poprzednim etapie badania opracowano kilka zmiennych objaśniających, bazujących na właściwościach tekstu podsumowania i samej recenzji.
+
+
+## Wyniki analizy
+
+
+## Podsumowanie
