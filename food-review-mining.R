@@ -57,6 +57,9 @@ descWords %>% left_join(reviews) %>%
 
 #Sentiment analysis
 
+#Removing stop words
+decscWords <- descWords %>% anti_join(stop_words)
+
 #lexicon
 #(-5 - very negative, 5 - very positive)
 afinn <- get_sentiments("afinn")
@@ -87,7 +90,8 @@ descSentiment %>% left_join(reviews) %>%
 
 
 
-#Same for full text of review  
+#Same for full text of review 
+
 textWords <- reviews %>%
   select(nr, Text) %>%
   unnest_tokens(word, Text)
@@ -96,6 +100,8 @@ textWords <- textWords %>%
   mutate(not = ifelse(row_number() == 1, 1, ifelse(
     word[row_number()-1] == "not", -1, 1)))
 
+#Removing stop words
+textWords <- textWords %>% anti_join(stop_words)
 
 textSentiment <- textWords %>% inner_join(afinn) %>%
   rename(sentiment = score) %>%
@@ -113,28 +119,19 @@ textSentiment %>% left_join(reviews) %>%
   ggplot(aes(x=Score, y=mean)) +
   geom_point()
 
- 
+
 #Punctuation
 descPunct <- reviews %>%
-  mutate(excl = str_detect(Summary, pattern="[!]"),
-         quest = str_detect(Summary, pattern="[?]"),
-         ellip = str_detect(Summary, pattern="[.]{3}"),
-         cap = str_detect(Summary, pattern = "[:upper:]{2,}"))
+  mutate(excl = str_count(Summary, pattern="[!]"),
+         quest = str_count(Summary, pattern="[?]"),
+         ellip = str_count(Summary, pattern="[.]{3}"),
+         cap = str_count(Summary, pattern = "[:upper:]{2,}"))
 
-exclR <- descPunct %>% group_by(excl) %>%
-  summarise(mean = mean(Score))
-
-questR <- descPunct %>% group_by(quest) %>%
-  summarise(mean = mean(Score))
-
-ellipR <- descPunct %>% group_by(ellip) %>%
-  summarise(mean = mean(Score))
-
-capR <- descPunct %>% group_by(cap) %>%
-  summarise(mean = mean(Score))
-
-result <- data.frame(exclR, questR, ellipR, capR)
-
+textPunct <- reviews %>%
+  mutate(excl = str_count(Text, pattern="[!]"),
+         quest = str_count(Text, pattern="[?]"),
+         ellip = str_count(Text, pattern="[.]{3}"),
+         cap = str_count(Text, pattern = "[:upper:]{2,}"))
 
 
   
