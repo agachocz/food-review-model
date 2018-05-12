@@ -19,6 +19,14 @@ library(dplyr)
 library(readr)
 library(ggplot2)
 library(stringr)
+library(gridExtra)
+library(tidyr)
+
+library(rpart)
+library(rpart.plot)
+library(class)
+library(pROC)
+library(randomForest)
 ```
 
 ### Dane
@@ -35,7 +43,7 @@ Dane z pliku *food.csv* zawierają **28138** obserwacji, składających się z:
 
 Fragment danych przedstawiono na wydruku poniżej.
 
-```{r echo = FALSE}
+```{r echo = FALSE, message = FALSE}
 #Setting project directory
 setwd("~/food-review-model")
 
@@ -49,10 +57,358 @@ head(reviews)
 
 ### Zmienne objaśniające
 
-Na poprzednim etapie badania opracowano kilka zmiennych objaśniających, bazujących na właściwościach tekstu podsumowania i samej recenzji.
+Na poprzednim etapie badania opracowano kilka zmiennych objaśniających, bazujących na właściwościach tekstu podsumowania i samej recenzji. Zostaną one krótko przypomniane w tej części pracy, wraz z naniesionymi poprawkami. Na podstawie analizy każdej z nich postawiono hipotezę dotyczącą wpływu charakteryzowanego przez zmienną czynnika na punktową ocenę produktu.
+
+
+### Długość tekstu (w słowach)
+
+```{r message=FALSE}
+#Analizing words in Summary
+descWords <- reviews %>%
+  select(nr, Summary) %>%
+  unnest_tokens(word, Summary)
+
+descWords %>% left_join(reviews) %>%
+  count(Score, word) %>%
+  group_by(Score) %>%
+  summarise(srednia = mean(n),
+            odchylenie  = sd(n),
+            liczba_obs = n())
+```
+
+Przedstawione statystyki opisowe pokazują, że choć wraz ze wzrostem oceny wzrasta średnia liczba słów w recenzji, to rośnie również wariancja, ponieważ zbiór danych zawiera znacznie więcej ocen pozytywnych niż negatywnych. Właściwości te prezentuje poniższa grafika, zawierająca histogramy podsumowań o danej długości w zależności od oceny. (Dla większej czytelności zostały wycięte obserwacje od 10 słów.) Rozkłady dla wszystkich ocen mają niemal identyczny kształt, co pozwala sądzić, że długość podsumowania recenzji nie będzie przydatna w badaniu.
+
+```{r echo = F, message = F, warning = F}
+descWords %>% left_join(reviews) %>%
+  count(Score, word) %>%
+  filter(n < 10) %>%
+  ggplot(aes(x = n)) +
+  facet_wrap(~Score) +
+  geom_histogram(bins = 10) +
+  labs(title = "Rozkład liczby słów w recenzji w zależności od liczby punktów",
+       x = "Liczba recenzji", y = "Liczba słów w recenzji")
+
+```
+
+Podobne wnioski można wyciągnąć na podstawie analizy pełnego tekstu recenzji, co zostało przedstawione na poniższych grafikach i statystykach opisowych:
+
+```{r message = F, warning = F}
+textWords <- reviews %>%
+  select(nr, Text) %>%
+  unnest_tokens(word, Text)
+
+#Structure
+textWords %>% left_join(reviews) %>%
+  count(Score, word) %>%
+  group_by(Score) %>%
+  summarise(srednia = mean(n),
+            odchylenie  = sd(n),
+            liczba_obs = n())
+
+textWords %>% left_join(reviews) %>%
+  count(Score, word) %>%
+  filter(n < 30) %>%
+  ggplot(aes(x = n)) +
+  facet_wrap(~Score) +
+  geom_histogram(bins = 10) +
+  labs(title = "Rozkład liczby słów w recenzji w zależności od liczby punktów",
+       x = "Liczba recenzji", y = "Liczba słów w recenzji")
+```
+
+**Hipoteza 1: Brak zależności między długością tekstu a wysokością oceny.**
+
+
+### Zabarwienie pozytywne/negatywne tekstu
+
+Występowanie w tekście słów kojarzonych z pozytywnym lub negatywnym wydźwiękiem jest najbardziej intuicyjnym i bezpośrednim sposobem by poznać, jak wysoko autor recenzji ceni produkt. Do zbadania tej właściwości posłużono się słownikiem *afinn* z pakietu *tidytext*, który ocenia słowa w skali od **-5** (bardzo negatywne) do **5** (bardzo pozytywne).
+
+Poniższy listing przedstawia operację przypisania każdemu podsumowaniu recenzji wartość liczbową, odpowiadającą sumie wartości wszystkich jego słów, uwzględnionych w zbiorze afinn.
+
+```{r message = F, warning = F}
+
+afinn <- get_sentiments("afinn")
+
+#Including the impact of words "not" and "don't"
+descWords <- descWords %>%
+  mutate(not = ifelse(lag(word, n=1) == "not" | lag(word, n=1) == "don't", -1, 1))
+descWords$not[1] = 1
+
+descSentiment <- descWords %>% inner_join(afinn) %>%
+  rename(sentiment = score) %>%
+  group_by(nr) %>%
+  summarise(Sum_sum = sum(sentiment*not))
+```
+
+Na wykresie średniej wartości podsumowań w zależności od punktów uzyskanych przez produkt (pionowe linie oznaczają wartości odchylenia standardowego) można zauważyć, że ocena rośnie wraz ze wzrostem pozytywnego 'zabarwienia' słów w tekście. 
+
+```{r message = F, warning = F}
+
+descSentiment %>% left_join(reviews) %>%
+  group_by(Score) %>%
+  summarise(mean = mean(Sum_sum), sd = sd(Sum_sum)) %>%
+  ggplot(aes(x=Score, y=mean)) +
+  geom_pointrange(aes(y = mean, ymin = mean-sd, ymax = mean+sd), size = .9, alpha = .7) +
+  labs(title = "Średnia wartość łacznego 'zabarwienia' słów w podsumowaniu",
+       x = "Ocena", y = "Średnia")
+
+```
+
+
+Identyczne operacje wykonano dla pełnego tekstu recenzji:
+
+```{r message = F, warning = F}
+textWords <- textWords %>%
+  mutate(not = ifelse(lag(word, n=1) == "not" | lag(word, n=1) == "don't", -1, 1))
+textWords$not[1] = 1
+
+textSentiment <- textWords %>% inner_join(afinn) %>%
+  rename(sentiment = score) %>%
+  group_by(nr) %>%
+  summarise(Text_sum = sum(sentiment*not))
+
+textSentiment %>% left_join(reviews) %>%
+  group_by(Score) %>%
+  summarise(mean = mean(Text_sum), sd = sd(Text_sum)) %>%
+  ggplot(aes(x=Score, y=mean)) +
+  geom_pointrange(aes(y = mean, ymin = mean-sd, ymax = mean+sd), size = .9, alpha = .7) +
+  labs(title = "Średnia wartość łacznego 'zabarwienia' słów w recenzji",
+       x = "Ocena", y = "Średnia")
+```
+
+
+Wydaje się, że dla samych podsumowań wartości te są nieznacznie wyraźniejsze.
+
+**Hipoteza 2: Im więcej silnie pozytywnych słów, tym wyższa wartość Score, i zależność ta jest silna.**
+
+
+### Czynniki pozawerbalne
+
+*Uzupełnienie: Na poprzednim etapie badania sprawdzono tylko występowanie danego czynnika lub jego brak, teraz wzięto pod uwagę liczbę wystąpień.*
+
+Wśród takich czynników rozważono: wykrzykniki, znaki zapytania, wielokropki oraz wyrazy pisane w całości wielkimi literami. Porównanie średniej liczby wystąpień tych czynników w tekstach podsumowań i recenzji przedstawiono na poniższych wykresach:
+
+```{r message=F, warning=F}
+#Punctuation
+descPunct <- reviews %>%
+  mutate(Sum_excl = str_count(Summary, pattern="[!]"),
+         Sum_quest = str_count(Summary, pattern="[?]"),
+         Sum_ellip = str_count(Summary, pattern="[.]{3}"),
+         Sum_cap = str_count(Summary, pattern = "[:upper:]{2,}"))
+
+textPunct <- reviews %>%
+  mutate(Text_excl = str_count(Text, pattern="[!]"),
+         Text_quest = str_count(Text, pattern="[?]"),
+         Text_ellip = str_count(Text, pattern="[.]{3}"),
+         Text_cap = str_count(Text, pattern = "[:upper:]{2,}"))
+
+
+#Plots
+descPunct %>% gather(non_verb_attr, quantity, Sum_excl:Sum_cap) %>%
+  group_by(Score, non_verb_attr) %>%
+  summarise(mean = mean(quantity)) %>%
+  ggplot(aes(x = Score, y = mean, color = non_verb_attr)) +
+  geom_line() +
+  scale_color_discrete(name = "Czynnik", breaks = c("Sum_cap", "Sum_ellip", "Sum_excl", "Sum_quest"),
+                       labels = c("wielkie litery", "wielokropki", "wykrzykniki", "pytajniki")) +
+  labs(title = "Średnia liczba czynników niewerbalnych w podsumowaniach",
+       x = "Ocena", y = "Średnia")  
+
+textPunct %>% gather(non_verb_attr, quantity, Text_excl:Text_cap) %>%
+  group_by(Score, non_verb_attr) %>%
+  summarise(mean = mean(quantity)) %>%
+  ggplot(aes(x = Score, y = mean, color = non_verb_attr)) +
+  geom_line() +
+  scale_color_discrete(name = "Czynnik", breaks = c("Text_cap", "Text_ellip", "Text_excl", "Text_quest"),
+                       labels = c("wielkie litery", "wielokropki", "wykrzykniki", "pytajniki")) +
+  labs(title = "Średnia liczba czynników niewerbalnych w podsumowaniach",
+       x = "Ocena", y = "Średnia") 
+```
+
+Na ich podstawie widać, że czynniki wyrażające emocje autora (wykrzykniki i nadużywanie wielkich liter) mogą świadczyć zarówno o bardzo pozytywnym, jak i bardzo negatywnym odbiorze produktu. Przeciwnie jest z wielokropkami, dominującymi w recenzjach z oceną 3. Tylko zawartość znaków zapytania maleje wraz ze wzrostem oceny.
+
+**Hipoteza 3: **
+
+**a) Mała liczba wykrzykników i wyrazów pisanych wielkimi literami oraz duża liczba wielokropków wiążą się z przeciętną oceną**
+
+**b) Im więcej znaków zapytania, tym niższa ocena**
 
 
 ## Wyniki analizy
 
 
+### Wprowadzenie
+
+Jak można było zauważyć na podstawie wykresów zamieszczonych w poprzednim rozdziale, analogiczne zmienne opisujące teksty podsumowania i pełnej recenzji mają niemal identyczny wpływ na zmienną objaśnianą. Dlatego model będzie oparty o zbiór danych zawierający po prostu zsumowane wartości tych zmiennych.
+
+```{r message = F, warning = F}
+# Variables
+# words count
+Sum_words <- descWords %>% full_join(reviews) %>%
+  group_by(nr) %>%
+  summarise(Sum_words = n())
+
+Text_words <- textWords %>% full_join(reviews) %>%
+  group_by(nr) %>%
+  summarise(Text_words = n())
+
+
+# sentiment
+
+Sum_sent <- descSentiment %>% inner_join(reviews) %>%
+  select(nr, Sum_sum)
+
+Text_sent <- textSentiment %>% inner_join(reviews) %>%
+  select(nr, Text_sum)
+
+# punctuation
+
+Sum_punct <- descPunct %>%
+  select(nr, Sum_excl, Sum_quest, Sum_ellip, Sum_cap)
+
+Text_punct <- textPunct %>%
+  select(nr, Text_excl, Text_quest, Text_ellip, Text_cap)
+
+# Merging Summary and Text
+words_count <- full_join(Sum_words, Text_words) %>%
+  mutate(Words = Sum_words + Text_words,
+         Sum_words = NULL,
+         Text_words = NULL)
+
+words_count %>% filter(is.na(Words))
+
+sentiment <- inner_join(Sum_sent, Text_sent) %>%
+  mutate(Sent = Sum_sum + Text_sum,
+         Sum_sum = NULL,
+         Text_sum = NULL)
+
+punct <- inner_join(Sum_punct, Text_punct) %>%
+  mutate(Excl = Sum_excl + Text_excl,
+         Quest = Sum_quest + Text_quest,
+         Ellip = Sum_ellip + Text_ellip,
+         Cap = Sum_cap + Text_cap
+         ) %>%
+  select(nr, Excl, Quest, Ellip, Cap)
+
+Merged_vars <- full_join(words_count, sentiment) %>%
+  full_join(punct) %>%
+  mutate(Sent = if_else(is.na(Sent), 0, Sent))
+```
+
+Ewaluacja modeli będzie dokonywana za pomocą wartości auc [Area Under the Curve] dla problemu wieloklasowego, z wykorzystaniem pakietu **pROC**.
+
+
+### Metoda najbliższych sąsiadów
+
+Pierwsza z wybranych metod rozpoznaje klasę obserwacji na podstawie znajomości klas innych obserwacji, znajdujących się w jej najbliższym otoczeniu. Do zastosowania *metody najbliższych sąsiadów* wykorzystano pakiet **class**.
+
+Na początku podzielono dane na zbiór uczący i testowy:
+
+```{r message = F, warning = F}
+# Traing and testing datasets
+data_df <- as.data.frame(Merged_vars)
+y_vals <- as.factor(reviews$Score)
+
+size <- nrow(data_df)
+train_size <- round(size*2/3)
+split_points <- sample(size, train_size, replace = F)
+
+train_set <- data_df[split_points,]
+test_set <- data_df[-split_points,]
+train_y <- as.factor(y_vals[split_points])
+test_y <- as.factor(y_vals[-split_points]) 
+```
+
+Kluczową kwestią jest wybór, na podstawie ilu najbliższych sąsiadów ma się dokonywać klasyfikacja. W tym celu wielokrotnie wykonano modelowanie z różnymi wartościami parametru *k* i porównano wyniki:
+
+```{r message = F, warning = F}
+auc <- vector()
+
+for(i in 1:5){
+  knn_model <- knn(train = train_set, test = test_set, cl = train_y, k = i)
+  auc[i] <- multiclass.roc(test_y, ordered(knn_model))$auc[1]
+}
+
+plot(auc)
+print(paste("AUC dla k = 1:", max(auc)))
+```
+
+Najlepsze wyniki metoda uzyskuje dla parametru `k = 1`, ale i tak można uznać je za słabe.
+
+
+### Metoda drzew regresyjnych
+
+Metoda bazuje na takim dzieleniu przestrzeni obserwacji, by wyodrębnić od siebie jak najdokładniej obserwacje o różnych klasach. W R można w tym celu wykorzystać pakiet **rpart**.
+
+```{r message = F, warning = F}
+tree_model <- rpart(Score ~., data = cbind(train_set, Score = train_y), method = "class")
+rpart.plot(tree_model)
+tree_pred <- predict(tree_model, test_set, type = "class")
+auc <- multiclass.roc(test_y, ordered(tree_pred))$auc[1]
+print(paste("AUC dla drzewa regresyjnego:", auc))
+```
+
+Jak widać, drzewo wyodrębniło tylko dwie klasy: pierwszą i piątą. Dzieje się tak z powodu dużej dominacji w zbiorze danych produktów ocenionych na 5. Dlatego ograniczono oryginalny zbiór danych, wybierając z niego losowo 5000 obserwacji, co wprowadzi większą równowagę.
+
+```{r message = F, warning = F}
+# Equalization
+score_5 <- reviews %>% filter(Score == 5) %>%
+  sample_n(5000, replace = F) %>%
+  select(nr)
+
+other_score <- reviews %>% filter(Score != 5) %>%
+  select(nr)
+
+chosen_data <- as.vector(rbind(score_5, other_score))
+data_df <- data_df[chosen_data$nr,]
+y_vals <- y_vals[chosen_data$nr]
+
+size <- nrow(chosen_data)
+train_size <- round(size*2/3)
+split_points <- sample(size, train_size, replace = F)
+
+train_set <- data_df[split_points,]
+test_set <- data_df[-split_points,]
+train_y <- as.factor(y_vals[split_points])
+test_y <- as.factor(y_vals[-split_points]) 
+```
+
+Modelowanie zostało przeprowadzone ponownie:
+
+```{r message = F, warning = F}
+tree_model <- rpart(Score ~., data = cbind(train_set, Score = train_y), method = "class")
+rpart.plot(tree_model)
+```
+
+Wykres błędu w zależności od wielkości drzewa pokazuje, że obcięcie tylko zmniejszyłoby dokładność.
+
+```{r message = F, warning = F}
+plotcp(tree_model)
+```
+
+Na wygenerowanym drzewie została dokonana predykcja:
+
+```{r message = F, warning = F}
+tree_pred <- predict(tree_model, test_set, type = "class")
+auc <- multiclass.roc(test_y, ordered(tree_pred))$auc[1]
+print(paste("AUC dla drzewa regresyjnego:", auc))
+```
+
+Jakość algorytmu wyraźnie wzrosła, choć wciąż nie rozpoznaje wszystkich klas.
+
+
+### Random Forest
+
+Pewnym udoskonaleniem drzew jest metoda **random forest**, generująca nie jedno, a cały zestaw drzew, klasyfikujące na podstawie kilku losowo wybranych czynników - co pozwala "dojść do głosu" zmiennym mniej wyraźnie dyskryminującym klasy. W pracy wykorzystano pakiet *randomForest*. Do modelu wybrano liczbę 100 drzew, ponieważ próby wykazały, że powyżej tej wartości błąd pozostaje prawie stały.
+
+```{r message = F, warning = F}
+rf_model <- randomForest(Score ~., data = cbind(train_set, Score = train_y), ntree = 100)
+rf_pred <- predict(rf_model, test_set)
+auc <- multiclass.roc(test_y, ordered(rf_pred))$auc[1]
+print(paste("AUC dla random forest:", auc))
+```
+
+Jakość klasyfikacji nieznacznie się dzięki temu poprawiła.
+
 ## Podsumowanie
+
+Najlepszą z wypróbowanych metod okazał się *random forest* na zbiorze danych z wyrównaną liczbą obserwacji we wszystkich grupach ocen. Na podstawie wykresu drzewa decyzyjnego można zauważyć, że zgodnie z drugą hipotezą najsilniej dyskryminowała zmienna opisująca pozytywne/negatywne zabarwienie słów. Algorytm wykorzystał również obecność wykrzykników oraz długość tekstu.
